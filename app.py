@@ -1,84 +1,56 @@
-import os
-import io
-import base64
-from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_from_directory
-from PIL import Image
+from flask import Flask, render_template, Response
+import cv2
 import numpy as np
-from face_emotions import EmotionRecognizer
-
-
-UPLOAD_FOLDER = 'datasets/uploads'
-LABELED_FOLDER = 'datasets/labeled'
-MODEL_PATH = 'models/emotion_model.h5'
-
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.image import img_to_array
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Load model and Haar cascade
+face_classifier = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+classifier = load_model('emotion_model.h5')
 
-# instantiate recognizer (loads model)
-recognizer = EmotionRecognizer(model_path=MODEL_PATH)
-
+emotion_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surprise']
 
 @app.route('/')
-def index():
-return render_template('index.html')
+def home():
+    return render_template('index.html')
 
+def gen_frames():
+    camera = cv2.VideoCapture(0)
+    while True:
+        success, frame = camera.read()
+        if not success:
+            break
+        else:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_classifier.detectMultiScale(gray, 1.3, 5)
+            for (x, y, w, h) in faces:
+                roi_gray = gray[y:y+h, x:x+w]
+                roi_gray = cv2.resize(roi_gray, (48, 48), interpolation=cv2.INTER_AREA)
 
-@app.route('/predict', methods=['POST'])
-def predict():
-# expects JSON with key 'image' containing base64 PNG/JPEG data
-data = request.json
-if not data or 'image' not in data:
-return jsonify({'error': 'no image provided'}), 400
+                if np.sum([roi_gray]) != 0:
+                    roi = roi_gray.astype('float') / 255.0
+                    roi = img_to_array(roi)
+                    roi = np.expand_dims(roi, axis=0)
 
+                    prediction = classifier.predict(roi)[0]
+                    label = emotion_labels[prediction.argmax()]
+                    label_position = (x, y - 10)
+                    cv2.putText(frame, label, label_position, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
+                else:
+                    cv2.putText(frame, 'No Faces', (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-img_b64 = data['image'].split(',')[-1]
-img_bytes = base64.b64decode(img_b64)
-img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
 
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-# save raw upload for dataset
-ts = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
-filename = f'{ts}.jpg'
-save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-img.save(save_path)
+@app.route('/video_feed')
+def video_feed():
+    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-
-# get prediction
-pred = recognizer.predict_image(np.array(img))
-
-
-# optionally save labeled to datasets/labeled/<emotion>/
-return jsonify(pred)
-
-
-@app.route('/upload_label', methods=['POST'])
-def upload_label():
-# save a labeled image into datasets/labeled/<emotion>/ for future training
-data = request.json
-if not data or 'image' not in data or 'label' not in data:
-return jsonify({'error': 'image and label required'}), 400
-
-
-label = data['label']
-img_b64 = data['image'].split(',')[-1]
-img_bytes = base64.b64decode(img_b64)
-img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-
-
-target_dir = os.path.join('datasets', 'labeled', label)
-os.makedirs(target_dir, exist_ok=True)
-ts = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
-fname = os.path.join(target_dir, f'{label}_{ts}.jpg')
-img.save(fname)
-
-
-return jsonify({'status': 'saved', 'path': fname})
-
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
