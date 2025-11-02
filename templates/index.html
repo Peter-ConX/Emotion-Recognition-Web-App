@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Emotion Recognition Demo</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <h1>Emotion Recognition</h1>
+    <div id="camera-area">
+        <video id="video" width="320" height="240" autoplay></video>
+        <button id="snap">Snap & Predict</button>
+    </div>
+    <div id="upload-area">
+        <input type="file" id="fileInput" accept="image/*">
+        <button id="uploadBtn">Upload & Predict</button>
+    </div>
+    <div id="result"></div>
+
+
+    <script src="/static/script.js"></script>
+</body>
+
+</html>
